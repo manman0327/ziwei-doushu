@@ -5,6 +5,8 @@ import type { BirthInfo } from '@/lib/ziwei/types';
 import { SHICHEN } from '@/lib/ziwei/constants';
 import { useTheme } from '@/components/ThemeProvider';
 import { PROVINCES } from '@/lib/ziwei/cities';
+import { normalizeKnownBirth, parseClockPart } from '@/lib/ziwei/normalize-birth';
+import { isValidGregorianDate, calculateTrueSolarTime } from '@/lib/ziwei/true-solar-time';
 
 export interface BirthFormState {
   name: string;
@@ -30,22 +32,6 @@ interface BirthFormProps {
 }
 
 const SHICHEN_NAMES = ['子', '丑', '寅', '卯', '辰', '巳', '午', '未', '申', '酉', '戌', '亥'];
-
-/** 根据北京时间 + 经度计算真太阳时时辰支 (0-11) */
-function calcTrueSolarBranch(clockHour: number, clockMinute: number, longitude: number): number {
-  const clockMins = clockHour * 60 + clockMinute;
-  const offset = (longitude - 120) * 4;
-  const solar = ((clockMins + offset) % 1440 + 1440) % 1440;
-  if (solar >= 1380 || solar < 60) return 0;
-  return Math.floor((solar - 60) / 120) + 1;
-}
-
-/** 检查日期是否合法 */
-function isValidDate(y: number, m: number, d: number): boolean {
-  if (!y || !m || !d) return false;
-  const date = new Date(y, m - 1, d);
-  return date.getFullYear() === y && date.getMonth() === m - 1 && date.getDate() === d;
-}
 
 export default function BirthForm({ onSubmit, loading, initialData, onFormSave, hideSubmit }: BirthFormProps) {
   const { theme } = useTheme();
@@ -79,22 +65,36 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
     return prov ? prov.cities : [];
   }, [form.province]);
 
-  const branch = useMemo(() => {
-    if (form.unknownTime) return 0;
-    return calcTrueSolarBranch(
-      parseInt(form.clockHour) || 0,
-      parseInt(form.clockMinute) || 0,
-      form.longitude,
-    );
-  }, [form.clockHour, form.clockMinute, form.longitude, form.unknownTime]);
+  const y = Number(form.year);
+  const m = Number(form.month);
+  const d = Number(form.day);
+  const clockHour = parseClockPart(form.clockHour, 23);
+  const clockMinute = parseClockPart(form.clockMinute, 59);
+  const timeError = !form.unknownTime && (clockHour === null || clockMinute === null)
+    ? '请选择有效的出生小时和分钟' : '';
 
-  const offsetMin = Math.round((form.longitude - 120) * 4);
-  const shichenInfo = SHICHEN[branch];
+  const normalizedBirth = useMemo(() => {
+    if (form.unknownTime || clockHour === null || clockMinute === null) return null;
+    try {
+      return normalizeKnownBirth({
+        year: y, month: m, day: d, clockHour, clockMinute,
+        gender: form.gender, name: form.name || undefined,
+        province: form.province || undefined, city: form.city || undefined,
+        longitude: form.province ? form.longitude : undefined,
+      });
+    } catch {
+      return null;
+    }
+  }, [form, y, m, d, clockHour, clockMinute]);
 
-  // ─── 校验逻辑 ───────────────────────────────────────────
-  const y = parseInt(form.year) || 0;
-  const m = parseInt(form.month) || 0;
-  const d = parseInt(form.day) || 0;
+  const branch = normalizedBirth?.hour;
+  const shichenInfo = branch === undefined ? undefined : SHICHEN[branch];
+  const offsetMin = normalizedBirth && clockHour !== null && clockMinute !== null
+    ? Math.round(calculateTrueSolarTime({
+        year: y, month: m, day: d, clockHour, clockMinute,
+        longitude: form.province ? form.longitude : undefined,
+      }).totalCorrectionMinutes)
+    : null;
 
   const errors = {
     year: !form.year ? '请选择出生年份'
@@ -102,10 +102,11 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
       : '',
     month: !form.month ? '请选择月份' : '',
     day: !form.day ? '请选择日期'
-      : form.year && form.month && !isValidDate(y, m, d) ? `${m}月没有${d}日`
+      : form.year && form.month && !isValidGregorianDate(y, m, d) ? `${m}月没有${d}日`
       : '',
   };
-  const hasError = Object.values(errors).some(Boolean);
+  const hasError = Object.values(errors).some(Boolean) || !!timeError ||
+    (!form.unknownTime && !normalizedBirth);
 
   // ─── 完成度（用于进度条） ────────────────────────────────
   const steps = [
@@ -122,7 +123,7 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
     ? [
         `${y}年${m}月${d}日`,
         form.city || (form.province ? form.province : ''),
-        form.unknownTime ? '时辰不详' : `${SHICHEN_NAMES[branch]}时`,
+        form.unknownTime ? '时辰不详（暂按子时示例）' : `${branch === undefined ? '待确认' : SHICHEN_NAMES[branch]}时`,
         form.gender === 'male' ? '男' : '女',
       ].filter(Boolean).join(' · ')
     : '';
@@ -145,7 +146,13 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
     setTouched({ year: true, month: true, day: true });
     if (hasError) return;
     onFormSave?.({ ...form });
-    onSubmit({ year: y, month: m, day: d, hour: branch, gender: form.gender, name: form.name || undefined, province: form.province || undefined, city: form.city || undefined, longitude: form.province ? form.longitude : undefined });
+    if (form.unknownTime) {
+      onSubmit({ year: y, month: m, day: d, hour: 0, gender: form.gender,
+        name: form.name || undefined, province: form.province || undefined,
+        city: form.city || undefined, unknownTime: true });
+    } else if (normalizedBirth) {
+      onSubmit(normalizedBirth);
+    }
   };
 
   // ─── 样式变量 ────────────────────────────────────────────
@@ -327,7 +334,7 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
               exit={{ opacity: 0 }}
               style={{ fontSize: '10px', color: isDark ? 'rgba(180,210,235,0.85)' : 'rgba(100,70,10,0.5)', marginTop: '5px' }}
             >
-              {form.city || '（请选择城市）'} · 经度 {form.longitude.toFixed(1)}°E · 时差 {offsetMin > 0 ? '+' : ''}{offsetMin} 分钟
+              {form.city || '（请选择城市）'} · 经度 {form.longitude.toFixed(1)}°E · 时差 {offsetMin === null ? '待输入有效日期和时间' : `${offsetMin > 0 ? '+' : ''}${offsetMin} 分钟（含均时差）`}
             </motion.p>
           ) : (
             <motion.p
@@ -369,9 +376,9 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
           </div>
           {/* 真太阳时结果 */}
           <div style={{ textAlign: 'center', padding: '4px 0' }}>
-            <span style={{ fontSize: '10px', color: isDark ? 'rgba(170,195,220,0.75)' : 'rgba(140,100,20,0.5)' }}>真太阳时 → </span>
+            <span style={{ fontSize: '10px', color: isDark ? 'rgba(170,195,220,0.75)' : 'rgba(140,100,20,0.5)' }}>{form.province ? '真太阳时 → ' : '钟表时间 → '}</span>
             <span style={{ fontSize: '15px', color: goldText, fontWeight: 600, letterSpacing: '0.08em' }}>
-              {SHICHEN_NAMES[branch]}时
+              {branch === undefined ? '待输入有效时间' : `${SHICHEN_NAMES[branch]}时`}
             </span>
             {shichenInfo && (
               <span style={{ fontSize: '10px', color: isDark ? 'rgba(170,195,220,0.75)' : 'rgba(140,100,20,0.5)', marginLeft: '4px' }}>
@@ -380,6 +387,12 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
             )}
           </div>
         </div>
+        {submitAttempted && timeError && <p role="alert" style={{ color: errorClr }}>{timeError}</p>}
+        {normalizedBirth && (normalizedBirth.year !== y || normalizedBirth.month !== m || normalizedBirth.day !== d) && (
+          <p role="status" style={{ fontSize: 11, color: goldText }}>
+            按真太阳时及晚子时规则，排盘日期为 {normalizedBirth.year}年{normalizedBirth.month}月{normalizedBirth.day}日
+          </p>
+        )}
         <label style={{ display: 'flex', alignItems: 'center', gap: '7px', marginTop: '8px', cursor: 'pointer' }}>
           <input
             type="checkbox"
@@ -388,7 +401,7 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
             style={{ width: '14px', height: '14px', borderRadius: '4px', cursor: 'pointer' }}
           />
           <span style={{ fontSize: '10px', color: isDark ? 'rgba(165,185,210,0.7)' : 'rgba(140,100,20,0.45)' }}>
-            不知道出生时间，以子时（23:00–01:00）起盘
+            不知道出生时间，暂按子时示例（结果不确定）
           </span>
         </label>
       </div>
@@ -493,3 +506,4 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
     </motion.form>
   );
 }
+

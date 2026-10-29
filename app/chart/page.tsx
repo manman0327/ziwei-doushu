@@ -43,7 +43,12 @@ export default function ChartPage() {
     <main style={{ maxWidth: 1280, margin: '0 auto', padding: '24px 16px' }}>
       <button
         type="button"
-        onClick={() => { setChart(null); setSelectedPalace(null); }}
+        onClick={() => {
+          setChart(null);
+          setSelectedPalace(null);
+          setView('mingpan');
+          setLiunianYear(new Date().getFullYear());
+        }}
         style={{
           marginBottom: 16, padding: '6px 14px', cursor: 'pointer',
           border: '1px solid #ccc', borderRadius: 8, background: 'transparent',
@@ -51,6 +56,10 @@ export default function ChartPage() {
       >
         ← 重新起盘
       </button>
+
+      {chart.birthInfo.unknownTime && (
+        <p role="status">出生时辰不详：此盘暂按子时示例，不能视为确定命盘。</p>
+      )}
 
       <TimeNav
         chart={chart}
@@ -67,9 +76,15 @@ export default function ChartPage() {
           gap: 20, marginTop: 16, alignItems: 'start',
         }}
       >
-        <ChartBoard chart={chart} onPalaceSelect={setSelectedPalace} />
+        <ChartBoard
+          chart={chart}
+          view={view}
+          liunianYear={liunianYear}
+          onPalaceSelect={setSelectedPalace}
+        />
         <InsightPanel chart={chart} selectedPalace={selectedPalace} />
       </div>
     </main>
   );
 }
+

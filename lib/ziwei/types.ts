@@ -1,4 +1,6 @@
 export interface BirthInfo {
+  /** Unknown birth time: chart is a provisional Zi-hour example. */
+  unknownTime?: boolean;
   year: number;      // Gregorian year（已经过子时换日修正后的"排盘日"）
   month: number;     // Gregorian month (1-12)
   day: number;       // Gregorian day
@@ -119,3 +121,4 @@ export interface ZiweiChart {
   /** 阴阳性别（阳男/阴男/阳女/阴女） */
   yinYangGender?: string;
 }
+
